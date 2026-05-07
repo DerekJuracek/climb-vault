@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 from app.db.database import Base
 
-EMBEDDING_DIM = 1536
+EMBEDDING_DIM = 3072
 
 
 class Analysis(Base):

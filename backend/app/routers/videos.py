@@ -1,7 +1,7 @@
 import uuid
 import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import select
 from app.db.database import get_db
 from app.models.video import Video, VideoStatus
@@ -15,26 +15,52 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 
 
 async def _run_analysis(video_id: uuid.UUID, storage_url: str, db_url: str):
-    """Background task that runs after a video is uploaded.
+    engine = create_async_engine(db_url, echo=False)  
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
 
-    This is the core of the RAG pipeline — runs outside the HTTP request cycle.
-    It needs its own DB session because FastAPI's request-scoped session is already closed.
+    video = select(Video).where(Video.id == video_id)
+    async with async_session() as session:
+        result = await session.execute(video)
+        video_obj = result.scalar_one_or_none()
+        if not video_obj:
+            print(f"Video with ID {video_id} not found in DB.")
+            return
 
-    CHALLENGE — implement these steps in order:
-    1. Create a new async engine + session from db_url (see how upload_video uses get_db
-       for reference, but here you can't use Depends — you have to build it manually)
-    2. Fetch the Video by video_id and set status → VideoStatus.processing, then commit
-    3. Read the video file bytes from storage_url using aiofiles.open(..., "rb")
-    4. Call analyze_video(video_bytes) → gemini_result dict
-    5. Stringify the result with json.dumps() — this is the text you'll embed
-    6. Call generate_embedding(summary_text) → a list of 1536 floats
-    7. Create an Analysis row and add it to the session
-       (map each key from gemini_result, store the embedding, set raw_gemini_response)
-    8. Set video.status → VideoStatus.analyzed and commit
-    9. Wrap steps 3-8 in try/except — on any exception set status → VideoStatus.failed
-    10. Always dispose the engine when done
-    """
-    raise NotImplementedError
+        video_obj.status = VideoStatus.processing
+        await session.commit()
+
+        try:
+            import aiofiles
+            async with aiofiles.open(storage_url, "rb") as f:
+                video_bytes = await f.read()
+
+            gemini_result = await analyze_video(video_bytes)
+
+            summary_text = json.dumps(gemini_result)
+            embedding_vector = await generate_embedding(summary_text)
+
+            analysis = Analysis(
+                video_id=video_id,
+                movement_summary=gemini_result.get("movement_summary", ""),
+                footwork_score=gemini_result.get("footwork_score", 0),
+                body_position_score=gemini_result.get("body_position_score", 0),
+                balance_score=gemini_result.get("balance_score", 0),
+                technique_tags=gemini_result.get("technique_tags", []),
+                key_moments=gemini_result.get("key_moments", []),
+                embedding=embedding_vector,
+                raw_gemini_response=json.dumps(gemini_result),
+            )
+            print(f"Analysis for video {video_id}: {analysis}")
+            session.add(analysis)
+
+            video_obj.status = VideoStatus.analyzed
+            await session.commit()
+        except Exception as e:
+            print(f"Error processing video {video_id}: {e}")
+            video_obj.status = VideoStatus.failed
+            await session.commit()
+        
+    await engine.dispose()
 
 
 @router.post("/upload", response_model=VideoRead, status_code=201)

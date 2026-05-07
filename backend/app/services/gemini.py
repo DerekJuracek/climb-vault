@@ -29,29 +29,22 @@ Focus on movement efficiency, weight transfer, footwork precision, and body posi
 
 
 async def analyze_video(video_bytes: bytes, mime_type: str = "video/mp4") -> dict:
-    """Send video bytes to Gemini and return the parsed JSON response.
+    """Use Gemini to analyze the climbing video and return structured feedback."""
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    response = await model.generate_content_async(
+        [{"mime_type": mime_type, "data": video_bytes}, ANALYSIS_PROMPT],
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.2,
+        ),
+    )
 
-    CHALLENGE:
-    - Create a GenerativeModel using "gemini-1.5-pro"
-    - Call generate_content_async() with two parts: the video bytes (as an
-      inline dict with "mime_type" and "data" keys) and the ANALYSIS_PROMPT string
-    - Use GenerationConfig with response_mime_type="application/json" and a low temperature
-    - Parse response.text with json.loads() and return the dict
-    """
-    raise NotImplementedError
+    result = json.loads(response.text)
+    print(result)
+    return result
 
 
 async def generate_embedding(text: str) -> list[float]:
-    """Convert a text string into a vector of floats using Gemini's embedding model.
-
-    CHALLENGE:
-    - Call genai.embed_content_async() with model="models/text-embedding-004"
-      and your text as the content argument
-    - The result is a dict — the embedding lives at result["embedding"]
-    - Return it as a list[float]
-
-    This is what gets stored in pgvector. The text you pass in will be the
-    JSON-stringified Gemini analysis, so semantically similar climbs will
-    end up with similar vectors.
-    """
-    raise NotImplementedError
+  """Converts text of video analysis into a vector embedding using Gemini's text-embedding-004 model."""
+  result = await genai.embed_content_async(model="models/gemini-embedding-2", content=text)
+  return result["embedding"]
