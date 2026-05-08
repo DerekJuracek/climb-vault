@@ -1,4 +1,5 @@
 import uuid
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.analysis import Analysis
 from app.models.video import Video
@@ -11,18 +12,26 @@ async def find_similar_videos(
     limit: int = 5,
     exclude_video_id: uuid.UUID | None = None,
 ) -> list[SimilarVideoResult]:
-    """Query pgvector for analyses whose embedding is closest to the given one.
+    
+    smtp = select(Analysis, Video, (1 - Analysis.embedding.cosine_distance(embedding)).label("similarity")).join(Video, Analysis.video_id == Video.id).filter(Analysis.embedding.isnot(None)).order_by(Analysis.embedding.cosine_distance(embedding))
+    if exclude_video_id is not None:
+        smtp = smtp.where(Analysis.video_id != exclude_video_id)
+    smtp = smtp.limit(limit)
 
-    CHALLENGE:
-    - Build a SQLAlchemy select() that joins Analysis → Video
-    - Filter out rows where Analysis.embedding IS NULL
-    - Order by Analysis.embedding.cosine_distance(embedding)  ← pgvector operator
-    - Compute a similarity score as (1 - cosine_distance) and label it "similarity"
-    - Apply the exclude_video_id filter if provided
-    - Apply .limit(limit)
-    - Execute, then map each row to a SimilarVideoResult and return the list
+    result = await db.execute(smtp)
+    results = result.all()
+    similar_videos = []
+    for row in results:
+        similar_videos.append(
+            SimilarVideoResult(
+                video_id=row.Analysis.video_id,
+                title=row.Video.title,
+                climb_grade=row.Video.climb_grade,
+                movement_summary=row.Analysis.movement_summary,
+                similarity=row.similarity
+            )
+        )
+        
+    return similar_videos
 
-    Cosine distance of 0 = identical, 2 = opposite.
-    Similarity of 1 = identical, which is why we do 1 - distance.
-    """
-    raise NotImplementedError
+
